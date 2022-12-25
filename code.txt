@@ -1,0 +1,448 @@
+// C++ code
+//
+#include <Adafruit_LiquidCrystal.h>
+
+/* --------------------------------------
+-----------------------------------------
+MAINĪGU DEKLARĒŠANA
+-----------------------------------------
+-----------------------------------------
+*/
+
+bool has_config = false; //vai ierīce ir nokonfigurēta
+int config_steps = 0;
+
+//glaba informaciju par sukņu portus, pie kuriem tie ir pieslegti
+int pomps[10]; 
+int count_of_pomps = 0;
+
+auto potenciometrs = A2;
+String pomp_names[10];
+//glāba informāciju, cik bieži ir jālieto sukņus
+float watering_times[10][2]; //min, days
+
+int butt_1 = 12; //yes poga
+int butt_0 = 13; //no poga
+
+/* pogam nepieciešamo mainīgi un funkciju izveidošana. 
+Tā kā pogas tiek lietoti vairākās reizēs, ir labāk 
+izveidot funkcijas pogu darbībai */
+
+bool butt_1_value; // glaba informāciju vai poga ir nospiesta
+bool butt_1_flag=0;
+unsigned long last_1_press = millis(); //kad pogu nospieda 1. reizi
+/* izveidojām funkciju, kas atjauno flagu,
+lai būtu zinams, ka poga bija nospiesta un saglāba laiku,
+kad poga bija nospiesta */
+void if_button_1_is_pressed(){
+  // millis() - last_1_press>50 ir nepiciešama
+  // gadījumā, ja notiek pogu grābēšana
+  if (butt_1_value == 1 && butt_1_flag == 0 && 
+      millis() - last_1_press>50) {
+    butt_1_flag = 1;
+    last_1_press = millis();
+  }
+}
+// lambda, kas pārbauda, vai poga bija atlaista
+auto button_1_is_released = [butt_1_value, butt_1_flag] () {
+  return (butt_1_value == 0 && butt_1_flag == 1);};
+
+// tas pats otrajai pogai
+
+bool butt_0_value;
+bool butt_0_flag=0;
+unsigned long last_0_press = millis();
+void if_button_0_is_pressed(){
+  if (butt_0_value == 1 && butt_0_flag == 0 && 
+      millis() - last_0_press>50) {
+    butt_0_flag = 1;
+    last_0_press = millis();
+  }
+}
+auto button_0_is_released = [butt_0_value, butt_0_flag] () {
+  return (butt_0_value == 0 && butt_0_flag == 1);};
+
+String pomp_name = "";
+int i = 0;
+int k=0;
+int symbol_count = 1;
+
+Adafruit_LiquidCrystal lcd(0); //display
+
+unsigned long last_millis = 0;
+int highest_millis = 0;
+int prev_c=-1;
+bool change_in_pocess = false;
+
+//funkcijas darbībai ar ekrānu
+void println(String s, int a = 0) {
+  lcd.setCursor(0, a);
+  lcd.print(s);
+}
+void clean_lcd(int a=2) {
+  if (a==2 or a==0){
+    lcd.setCursor(0,0); 
+    lcd.print("                ");
+  }
+  if (a==2 or a==1){
+    lcd.setCursor(0,1);
+    lcd.print("                "); 
+  }
+}
+
+// funkcija, kas tika izsaukta, ja routers nav nokonfigurēts
+void configuration() {
+  if (config_steps==0){
+    
+    /*----------------------
+    		SVEICIENS!!!
+    -----------------------*/
+    
+    println("Hello User!");
+    delay(2 * 100);
+    println("Please create");
+    println("configuration", 1);
+    delay(2 * 100);
+    clean_lcd();
+    println("Enter count of");
+    println("pomps", 1);
+    delay(2 * 100);
+    clean_lcd();
+    delay(2 * 100);
+    println("Count of pomps:");
+    config_steps=1;
+    return;
+  }
+  else if (config_steps==1){
+    
+    /*----------------------
+    SUKŅU DAUDZUMU IEGŪŠANA!!!
+    -----------------------*/
+    
+    // ieguvam lietotāja ievadīto vērtību, maksimāla
+    // iespējama vertība - 1023
+    int user_value = analogRead(potenciometrs);
+    user_value = (user_value-24) / 100 + 1; //[1,10]
+    lcd.setCursor(0,1);
+    lcd.print(user_value);
+    lcd.print(" ");
+    butt_1_value = !digitalRead(butt_1);
+    if_button_1_is_pressed(); // parbudam, vai poga ir nospiesta
+    //programma ies if iekšā tikai tad, kad 
+    //poga bija nospiesta un tagad ir atlaista
+    if (button_1_is_released()) {
+      butt_1_flag = 0;
+      clean_lcd();
+      println("Enter names for");
+      println("each pomp",1);
+      delay(1.5 * 100);
+      clean_lcd();
+      println("To change symbol(");
+      println("use wheel",1);
+      delay(1.5 * 100);
+      clean_lcd();
+      println("Press yes to");
+      println("confirm name",1);
+      delay(1.5 * 100);
+      clean_lcd();
+      println("Press no to");
+      println("create new symbol",1);
+      delay(1.5 * 100);
+      clean_lcd();
+
+      config_steps=2;
+	  symbol_count = 1;
+      count_of_pomps = user_value;
+    }
+    return;
+  }
+  else if (config_steps==2){
+    /*----------------------
+    SUKŅU NOSAUKUMU IEGŪŠANA!!!
+    -----------------------*/
+    
+    const char alphabet[34] = {'0','1','2','3','4','5', '6','7','8','9',
+                     'a', 'b', 'c', 'd', 'e', 'f', 'g', 'g',
+                     'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 
+                     'p', 'r', 's', 't', 'u','v', 'z', '_',};
+    char user_val_char;
+    //symbol_count, sakumā, ir 1; vislielāka  iespējama rinda
+    //ko var rakstīt uz ekrana ir 16, tāpēc, ja 16 simboli
+    // jau ir ievādīti, nav jāiegūva 17.
+    if (symbol_count <17) {
+      lcd.setCursor(symbol_count-1,0);
+      int user_value = analogRead(potenciometrs);
+      user_value = user_value / (1024.0/34); //[0,33]
+      user_val_char = alphabet[user_value];
+      lcd.print(user_val_char);
+    }
+    
+    butt_1_value = !digitalRead(butt_1);
+    butt_0_value = !digitalRead(butt_0);
+    if_button_1_is_pressed();
+    // ja "yes" poga ir nospiesta un atlaista,
+    // tad mēs saglābam to ka i. sukņa nosaukumu
+    if (button_1_is_released()) {
+      butt_1_flag = 0;
+      pomp_names[i] = pomp_name + user_val_char;
+      i++;
+      //ja visi sukņi ir nokonfigurēti
+      if (i+1>count_of_pomps) {
+        config_steps=3;
+        
+        clean_lcd();
+        println("Enter ports");
+        println("for each pomp",1);
+        delay(1.5 * 100);
+        clean_lcd();
+        println(pomp_names[0]);
+        
+        i = 0;
+        
+        return;
+      }
+      //atiestātām vertības
+      symbol_count = 1;
+      pomp_name = "";
+      clean_lcd();
+    }
+    if_button_0_is_pressed();
+    // ja "no" poga ir nospista, tad pievinojam simbolu
+    // pie sukņa nosaukumu, un prasām jauno simbolu
+    if (button_0_is_released()) { 
+      butt_0_flag = 0;
+      if (symbol_count<17){
+      	symbol_count++;
+      	pomp_name += user_val_char;
+      }
+    }
+    return;
+  }
+  else if (config_steps==3){
+    /*----------------------
+    SUKŅU PORTA IEGŪSANA!!!
+    -----------------------*/
+    
+    int user_value = analogRead(potenciometrs);
+    user_value = user_value / (1024.0/10) + 2; //[2,11]
+    lcd.setCursor(0,1);
+    lcd.print(user_value);
+    lcd.print(" ");
+    
+    butt_1_value = !digitalRead(butt_1);
+    if_button_1_is_pressed();
+    if (button_1_is_released()) {
+      butt_1_flag = 0;
+      pomps[i] = user_value;
+      i++;
+      if (i+1>count_of_pomps) {
+        config_steps=4;
+        clean_lcd();
+        println("Please enter");
+        println("duration",1);
+        delay(1.5*100);
+        clean_lcd();
+        println(pomp_names[0]);
+        println("Duration:",1);
+        i = 0;
+        k = 0;
+        return;
+      }  
+      clean_lcd();
+      println(pomp_names[i]);
+    }
+    
+    return;
+  }
+  else if(config_steps==4){
+    /*----------------------
+    	SUKŅU DARBĪBAS 
+    	LAIKU IEGŪŠANA!!!
+    -----------------------*/
+    
+    float user_value = analogRead(potenciometrs);
+    lcd.setCursor(15,1);
+    // ja k==0, tad mēs iegūvam cik daudz ir jālaista augus
+    if (k==0){
+      user_value = user_value / (1024.0/6) + 0.02; //[0.0,6.0)
+      lcd.setCursor(9,1);
+      lcd.print(int(user_value));
+      lcd.print("m ");
+      lcd.print(int((user_value-int(user_value))*60));
+      lcd.print(" ");
+      lcd.setCursor(15,1);
+      lcd.print("s");
+    }
+    //citādi iegūvam pēc kāda perioda ir jālaista augus
+    else {
+      user_value = user_value / (1024.0/31) + 1; //[1.0,31.0]
+      lcd.setCursor(11,1);
+      lcd.print(int(user_value));
+      lcd.print(" ");
+      lcd.setCursor(14,1);
+      lcd.print("d");
+    }
+    
+    butt_1_value = !digitalRead(butt_1);
+    if_button_1_is_pressed();
+    if (button_1_is_released()) {
+      butt_1_flag = 0;
+      watering_times[i][k] = user_value;
+      k++;
+      if (k>1) {
+        k = 0;
+        i++;
+        if (user_value>highest_millis) {
+        //highest_milis - ir nepieciešams, lai salaistu augus
+          highest_millis = user_value;
+        }
+        if (i+1>count_of_pomps) {
+          k=0;
+          config_steps = 5;
+          clean_lcd();
+          
+          println("Configured");
+          println("information:",1);
+          clean_lcd();
+          delay(1.5 * 1000);
+          
+          println(String(count_of_pomps));
+          lcd.print(" pomps");
+          delay(1 * 1000);
+          clean_lcd(0);
+          
+          println("All pomps");
+          println("configuration:",1);
+          clean_lcd();
+          
+          for (i=0;i<count_of_pomps;i++) {
+            println(pomp_names[i]);
+            lcd.setCursor(0,1);
+            lcd.print(int(watering_times[i][0]));
+            lcd.print(" m   ");
+            lcd.setCursor(4,1);
+            lcd.print(
+              int((watering_times[i][0] - int(watering_times[i][0]))*60));
+            lcd.print(" s   ");
+            lcd.setCursor(9,1);
+            lcd.print(int(watering_times[i][1]));
+            lcd.setCursor(11,1);
+            lcd.print(" d");
+            delay(1 * 1000);
+          }
+          clean_lcd();
+          println("Do you confirm");
+          println("configuration?",1);
+          
+          return;
+        }
+        clean_lcd();
+      	println(pomp_names[i]);
+      }
+      clean_lcd(1);
+      println("Duration:",1);
+    }
+  }
+  else if (config_steps==5) {
+     /*----------------------
+    KONFIGURĀCIJAS APSTIPRINĀJUMU
+    			POSMA
+    -----------------------*/
+    butt_0_value = !digitalRead(butt_0);
+    if_button_0_is_pressed();
+    if (button_0_is_released()) {
+      butt_0_flag = 0;
+      clean_lcd();
+      println("Enter count of");
+      println("pomps", 1);
+      delay(2 * 100);
+      clean_lcd();
+      delay(2 * 100);
+      println("Count of pomps:");
+      config_steps=1;
+      return;
+    }
+    
+    butt_1_value = !digitalRead(butt_1);
+    if_button_1_is_pressed();
+    if (button_1_is_released()) {
+      butt_1_flag = 0;
+      butt_0_flag = 0;
+      config_steps=-1;
+      clean_lcd();
+      return;
+    }
+  }
+  else {
+    has_config = true;
+  }
+}
+
+void setup()
+{
+  for (int i=0;i<10;i++) {
+    pomps[i] = 0; 
+    pinMode(i+2, OUTPUT);
+  }
+  pinMode(potenciometrs,INPUT);
+  pinMode(butt_1,INPUT);
+  pinMode(butt_0,INPUT);
+  lcd.begin(16, 2);
+  Serial.begin(9600);
+}
+
+void loop()
+{
+  if (!has_config) {
+    configuration();
+    delay(50);
+    last_millis = millis() - 1000;
+  }
+  else {
+    /*
+	Mainīgs k ir izveidots, tada gadījuma, ja
+    darbības laiks pārsniedz 49 dienas, un
+    millis() vertība sakas atkal no nulles.
+    */
+    
+    unsigned long long k = 0;
+    if (last_millis<millis()) {
+        k = 18446744073709551615;
+    }
+    
+    bool was_highest_millis = false;
+
+    for (int i=0;i<10;i++){
+      long days = 1000 * watering_times[i][1]; //30 * 24 * 60 * 60 * 
+      long mins = 1000 * watering_times[i][0]; 
+      if ((millis()+k-last_millis)%(days+mins)<mins){  
+        digitalWrite(pomps[i], HIGH);
+        if (watering_times[i][1]==highest_millis) {
+        	was_highest_millis = true;
+      	}
+      }
+      else {
+        digitalWrite(pomps[i], LOW);
+      }
+    }
+    if (was_highest_millis) {last_millis=millis();}
+    
+    int c = analogRead(potenciometrs);
+    c = c / (1024/count_of_pomps+1);
+    if (c!=prev_c) {
+      prev_c = c;
+      clean_lcd();
+      println(pomp_names[c]);
+      println(String(int(watering_times[c][1])),1);
+      lcd.setCursor(2,1);
+      lcd.print("d ");
+      lcd.print("for ");
+      lcd.print(int(watering_times[c][0]));
+      lcd.print("m ");
+      lcd.print(int((watering_times[c][0]-
+                     int(watering_times[c][0]))*60));
+      lcd.print("s");
+    }
+  }
+  
+}
